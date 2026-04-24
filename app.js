@@ -1,3 +1,5 @@
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js";
+
 const LAYER_COLORS = {
   visible: "#7ce0ff",
   collider: "#7dff9f",
@@ -13,64 +15,44 @@ const LAYER_COLORS = {
 const state = {
   data: null,
   enabledLayers: new Set(Object.keys(LAYER_COLORS)),
-  density: 1,
   searchText: "",
-  hover: null,
-  selected: null,
+  density: 1,
   filteredFeatures: [],
-  zoom: 1,
-  panX: 0,
-  panY: 0,
-  isPanning: false,
-  movedWhilePanning: false,
-  lastPointer: null,
+  selected: null,
+  isPointerLocked: false,
+  keys: new Set(),
+  yaw: 0,
+  pitch: 0,
+  moveSpeed: 90,
 };
 
-const canvas = document.getElementById("map");
-const ctx = canvas.getContext("2d");
+const viewportEl = document.getElementById("viewport");
 const selectionEl = document.getElementById("selection");
 const listEl = document.getElementById("object-list");
 const statsEl = document.getElementById("stats");
 const legendEl = document.getElementById("legend");
+const filteredCountEl = document.getElementById("filtered-count");
 
-function resizeCanvas() {
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = Math.max(1, Math.floor(rect.width * dpr));
-  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  draw();
-}
+const layerGroups = new Map();
+const featurePointClouds = [];
+let scene;
+let camera;
+let renderer;
+let raycaster;
+let colliderGroup;
+let selectedMarker;
+let animationClock;
 
-function worldToScreen(x, z) {
-  const b = state.data.bounds;
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight;
-  const worldW = Math.max(1e-6, b.maxX - b.minX);
-  const worldH = Math.max(1e-6, b.maxZ - b.minZ);
-  const sx = ((x - b.minX) / worldW) * width;
-  const sy = ((z - b.minZ) / worldH) * height;
-  return {
-    x: sx * state.zoom + state.panX,
-    y: sy * state.zoom + state.panY,
-  };
-}
-
-function screenToWorld(sx, sy) {
-  const b = state.data.bounds;
-  const width = canvas.clientWidth;
-  const height = canvas.clientHeight;
-  const x = ((sx - state.panX) / Math.max(1e-6, state.zoom) / width) * (b.maxX - b.minX) + b.minX;
-  const z = ((sy - state.panY) / Math.max(1e-6, state.zoom) / height) * (b.maxZ - b.minZ) + b.minZ;
-  return { x, z };
+function colorOf(layer) {
+  return new THREE.Color(LAYER_COLORS[layer] || "#d2f3e8");
 }
 
 function layerMatch(feature) {
   if (!feature.categories || feature.categories.length === 0) {
     return true;
   }
-  for (const cat of feature.categories) {
-    if (state.enabledLayers.has(cat)) {
+  for (const layer of feature.categories) {
+    if (state.enabledLayers.has(layer)) {
       return true;
     }
   }
@@ -81,129 +63,21 @@ function searchMatch(feature) {
   if (!state.searchText) {
     return true;
   }
-  const needle = state.searchText;
-  const blob = [feature.name, feature.tag, ...(feature.components || []), ...(feature.categories || [])]
+  const text = [feature.name, feature.tag, ...(feature.components || []), ...(feature.categories || [])]
     .join(" ")
     .toLowerCase();
-  return blob.includes(needle);
+  return text.includes(state.searchText);
 }
 
 function updateFiltered() {
-  const filtered = state.data.features.filter((f) => layerMatch(f) && searchMatch(f));
-  if (state.density < 1) {
-    const stride = Math.max(1, Math.round(1 / state.density));
-    state.filteredFeatures = filtered.filter((_, i) => i % stride === 0);
+  const all = state.data.features.filter((feature) => layerMatch(feature) && searchMatch(feature));
+  if (state.density >= 0.999) {
+    state.filteredFeatures = all;
   } else {
-    state.filteredFeatures = filtered;
+    const stride = Math.max(1, Math.round(1 / state.density));
+    state.filteredFeatures = all.filter((_, index) => index % stride === 0);
   }
   renderObjectList();
-}
-
-function drawGrid() {
-  const w = canvas.clientWidth;
-  const h = canvas.clientHeight;
-  ctx.save();
-  ctx.strokeStyle = "rgba(130, 206, 188, 0.14)";
-  ctx.lineWidth = 1;
-  for (let x = 0; x <= w; x += 60) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, h);
-    ctx.stroke();
-  }
-  for (let y = 0; y <= h; y += 60) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function drawFeatures() {
-  for (const feature of state.filteredFeatures) {
-    const p = worldToScreen(feature.position.x, feature.position.z);
-    const color = pickFeatureColor(feature);
-    ctx.fillStyle = color;
-    const r = state.selected?.id === feature.id ? 5 : 2.6;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-    ctx.fill();
-  }
-}
-
-function drawColliders() {
-  const shouldShowCollider = state.enabledLayers.has("collider");
-  const shouldShowTrigger = state.enabledLayers.has("trigger");
-  if (!shouldShowCollider && !shouldShowTrigger) {
-    return;
-  }
-
-  for (const col of state.data.colliders) {
-    if (col.isTrigger && !shouldShowTrigger) {
-      continue;
-    }
-    if (!col.isTrigger && !shouldShowCollider) {
-      continue;
-    }
-    if (state.searchText) {
-      const text = `${col.gameObjectName} ${col.type}`.toLowerCase();
-      if (!text.includes(state.searchText)) {
-        continue;
-      }
-    }
-
-    const c = worldToScreen(col.center.x, col.center.z);
-    ctx.save();
-    ctx.strokeStyle = col.isTrigger ? "#ff5574" : "#76ff9e";
-    ctx.fillStyle = col.isTrigger ? "rgba(255,85,116,0.2)" : "rgba(118,255,158,0.14)";
-    ctx.lineWidth = col.isTrigger ? 2 : 1.2;
-
-    if (col.type === "BoxCollider" && col.size) {
-      const rx = Math.abs((col.size.x / (state.data.bounds.maxX - state.data.bounds.minX)) * canvas.clientWidth * 0.5 * state.zoom);
-      const rz = Math.abs((col.size.z / (state.data.bounds.maxZ - state.data.bounds.minZ)) * canvas.clientHeight * 0.5 * state.zoom);
-      ctx.beginPath();
-      ctx.rect(c.x - rx, c.y - rz, rx * 2, rz * 2);
-      ctx.fill();
-      ctx.stroke();
-    } else if ((col.type === "SphereCollider" || col.type === "CapsuleCollider") && Number.isFinite(col.radius)) {
-      const rr = Math.abs((col.radius / (state.data.bounds.maxX - state.data.bounds.minX)) * canvas.clientWidth * state.zoom);
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, Math.max(2, rr), 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(c.x - 4, c.y);
-      ctx.lineTo(c.x + 4, c.y);
-      ctx.moveTo(c.x, c.y - 4);
-      ctx.lineTo(c.x, c.y + 4);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-}
-
-function pickFeatureColor(feature) {
-  const priority = ["trigger", "collider", "visible", "script", "physics", "light", "camera", "audio", "particle"];
-  for (const layer of priority) {
-    if (feature.categories?.includes(layer)) {
-      return LAYER_COLORS[layer];
-    }
-  }
-  return "#d2f3e8";
-}
-
-function draw() {
-  if (!state.data) {
-    return;
-  }
-  const w = canvas.clientWidth;
-  const h = canvas.clientHeight;
-  ctx.clearRect(0, 0, w, h);
-  drawGrid();
-  drawColliders();
-  drawFeatures();
 }
 
 function renderStats() {
@@ -215,7 +89,7 @@ function renderStats() {
     ["Triggers", state.data.stats.triggerColliderCount],
   ];
   statsEl.innerHTML = items
-    .map(([k, v]) => `<div class="stat-card"><span>${k}</span><strong>${v}</strong></div>`)
+    .map(([key, value]) => `<div class="stat-card"><span>${key}</span><strong>${value}</strong></div>`)
     .join("");
 }
 
@@ -233,6 +107,7 @@ function renderSelection(item, mode) {
     selectionEl.textContent = "Nothing selected.";
     return;
   }
+
   if (mode === "collider") {
     selectionEl.textContent = [
       `Collider ${item.id}`,
@@ -249,6 +124,7 @@ function renderSelection(item, mode) {
       .join("\n");
     return;
   }
+
   selectionEl.textContent = [
     `GameObject ${item.id}`,
     `Name: ${item.name}`,
@@ -262,173 +138,418 @@ function renderSelection(item, mode) {
 }
 
 function renderObjectList() {
-  const slice = state.filteredFeatures.slice(0, 350);
-  const html = slice
-    .map((f) => {
-      const cats = (f.categories || []).join("|");
-      return `<button class="object-row" data-id="${f.id}">${f.name} [${cats}] (${f.position.x.toFixed(1)}, ${f.position.z.toFixed(1)})</button>`;
+  filteredCountEl.textContent = `${state.filteredFeatures.length} objects visible`;
+  const slice = state.filteredFeatures.slice(0, 300);
+  const rows = slice
+    .map((feature) => {
+      const cats = (feature.categories || []).join("|");
+      return `<button class="object-row" data-id="${feature.id}">${feature.name} [${cats}] (${feature.position.x.toFixed(1)}, ${feature.position.y.toFixed(1)}, ${feature.position.z.toFixed(1)})</button>`;
     })
     .join("");
-  const plus = state.filteredFeatures.length > slice.length ? `<div class="object-row">... ${state.filteredFeatures.length - slice.length} more</div>` : "";
-  listEl.innerHTML = html + plus;
+  const extra =
+    state.filteredFeatures.length > slice.length
+      ? `<div class="object-row">... ${state.filteredFeatures.length - slice.length} more</div>`
+      : "";
+  listEl.innerHTML = rows + extra;
 }
 
-function pickNearest(pointerX, pointerY) {
-  const radius = 10;
-  let best = null;
-  let bestDist = Infinity;
+function setSelectedMarker(position) {
+  selectedMarker.position.copy(position);
+  selectedMarker.visible = true;
+}
+
+function focusCameraOn(position) {
+  const offset = new THREE.Vector3(25, 12, 25);
+  camera.position.copy(position.clone().add(offset));
+  camera.lookAt(position);
+  state.yaw = camera.rotation.y;
+  state.pitch = camera.rotation.x;
+}
+
+function clearSceneObjects() {
+  for (const points of featurePointClouds) {
+    points.geometry.dispose();
+    points.material.dispose();
+    points.parent?.remove(points);
+  }
+  featurePointClouds.length = 0;
+
+  colliderGroup.clear();
+}
+
+function addFeatureLayers() {
+  const featuresByLayer = new Map();
+  for (const layer of Object.keys(LAYER_COLORS)) {
+    featuresByLayer.set(layer, []);
+  }
 
   for (const feature of state.filteredFeatures) {
-    const p = worldToScreen(feature.position.x, feature.position.z);
-    const d = Math.hypot(pointerX - p.x, pointerY - p.y);
-    if (d < radius && d < bestDist) {
-      bestDist = d;
-      best = { mode: "feature", item: feature };
+    const categories = feature.categories || [];
+    if (categories.length === 0) {
+      featuresByLayer.get("script").push(feature);
+      continue;
+    }
+    for (const layer of categories) {
+      if (featuresByLayer.has(layer)) {
+        featuresByLayer.get(layer).push(feature);
+      }
     }
   }
 
-  for (const col of state.data.colliders) {
-    if (col.isTrigger && !state.enabledLayers.has("trigger")) {
+  for (const [layer, features] of featuresByLayer) {
+    if (features.length === 0) {
       continue;
     }
-    if (!col.isTrigger && !state.enabledLayers.has("collider")) {
-      continue;
+
+    const positions = new Float32Array(features.length * 3);
+    for (let i = 0; i < features.length; i += 1) {
+      positions[i * 3] = featurePosition(features[i]).x;
+      positions[i * 3 + 1] = featurePosition(features[i]).y;
+      positions[i * 3 + 2] = featurePosition(features[i]).z;
     }
-    const c = worldToScreen(col.center.x, col.center.z);
-    const d = Math.hypot(pointerX - c.x, pointerY - c.y);
-    if (d < radius && d < bestDist) {
-      bestDist = d;
-      best = { mode: "collider", item: col };
-    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+
+    const material = new THREE.PointsMaterial({
+      color: colorOf(layer),
+      size: layer === "trigger" ? 8.5 : 6.8,
+      sizeAttenuation: false,
+      transparent: true,
+      opacity: layer === "trigger" ? 1 : 0.92,
+      depthWrite: false,
+      fog: false,
+    });
+
+    const points = new THREE.Points(geometry, material);
+    points.userData = {
+      mode: "feature-points",
+      layer,
+      features,
+    };
+    points.visible = state.enabledLayers.has(layer);
+    layerGroups.get(layer).add(points);
+    featurePointClouds.push(points);
+  }
+}
+
+function addColliderVisual(collider) {
+  const isTrigger = Boolean(collider.isTrigger);
+  const color = isTrigger ? new THREE.Color("#ff5c7a") : new THREE.Color("#7dff9f");
+  const lineMaterial = new THREE.LineBasicMaterial({
+    color,
+    transparent: true,
+    opacity: isTrigger ? 0.9 : 0.58,
+  });
+
+  const center = new THREE.Vector3(collider.center.x, collider.center.y, collider.center.z);
+  let geometry;
+  if (collider.type === "BoxCollider" && collider.size) {
+    geometry = new THREE.EdgesGeometry(
+      new THREE.BoxGeometry(
+        Math.max(collider.size.x, 0.01),
+        Math.max(collider.size.y, 0.01),
+        Math.max(collider.size.z, 0.01)
+      )
+    );
+  } else if ((collider.type === "SphereCollider" || collider.type === "CapsuleCollider") && Number.isFinite(collider.radius)) {
+    geometry = new THREE.EdgesGeometry(new THREE.SphereGeometry(Math.max(collider.radius, 0.1), 10, 8));
+  } else {
+    geometry = new THREE.EdgesGeometry(new THREE.OctahedronGeometry(0.7));
   }
 
-  return best;
+  const wire = new THREE.LineSegments(geometry, lineMaterial);
+  wire.position.copy(center);
+  wire.userData = {
+    mode: "collider",
+    collider,
+  };
+  wire.visible = isTrigger ? state.enabledLayers.has("trigger") : state.enabledLayers.has("collider");
+  colliderGroup.add(wire);
+}
+
+function addColliderLayers() {
+  for (const collider of state.data.colliders) {
+    if (state.searchText) {
+      const text = `${collider.gameObjectName} ${collider.type}`.toLowerCase();
+      if (!text.includes(state.searchText)) {
+        continue;
+      }
+    }
+    addColliderVisual(collider);
+  }
+}
+
+function rebuildMapVisuals() {
+  clearSceneObjects();
+  addFeatureLayers();
+  addColliderLayers();
+}
+
+function featurePosition(feature) {
+  return new THREE.Vector3(feature.position.x, feature.position.y, feature.position.z);
+}
+
+function updateCameraRotation() {
+  camera.rotation.order = "YXZ";
+  camera.rotation.y = state.yaw;
+  camera.rotation.x = state.pitch;
+}
+
+function applyMovement(delta) {
+  if (!state.isPointerLocked) {
+    return;
+  }
+
+  const speedScale = state.keys.has("ShiftLeft") || state.keys.has("ShiftRight") ? 2.7 : 1;
+  const speed = state.moveSpeed * speedScale * delta;
+
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+  const up = new THREE.Vector3(0, 1, 0);
+  const move = new THREE.Vector3();
+
+  if (state.keys.has("KeyW")) {
+    move.add(forward);
+  }
+  if (state.keys.has("KeyS")) {
+    move.sub(forward);
+  }
+  if (state.keys.has("KeyD")) {
+    move.add(right);
+  }
+  if (state.keys.has("KeyA")) {
+    move.sub(right);
+  }
+  if (state.keys.has("KeyE")) {
+    move.add(up);
+  }
+  if (state.keys.has("KeyQ")) {
+    move.sub(up);
+  }
+
+  if (move.lengthSq() > 0) {
+    move.normalize().multiplyScalar(speed);
+    camera.position.add(move);
+  }
+}
+
+function pickInCenter() {
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  raycaster.params.Points.threshold = 3.6;
+  raycaster.params.Line.threshold = 2.0;
+
+  const intersections = raycaster.intersectObjects(scene.children, true);
+  for (const hit of intersections) {
+    if (hit.object.userData?.mode === "feature-points") {
+      const feature = hit.object.userData.features[hit.index];
+      if (!feature) {
+        continue;
+      }
+      state.selected = feature;
+      renderSelection(feature, "feature");
+      setSelectedMarker(featurePosition(feature));
+      return;
+    }
+
+    if (hit.object.userData?.mode === "collider") {
+      const collider = hit.object.userData.collider;
+      state.selected = collider;
+      renderSelection(collider, "collider");
+      setSelectedMarker(new THREE.Vector3(collider.center.x, collider.center.y, collider.center.z));
+      return;
+    }
+  }
+}
+
+function resetCamera() {
+  const b = state.data.bounds;
+  const center = new THREE.Vector3((b.minX + b.maxX) * 0.5, 80, (b.minZ + b.maxZ) * 0.5);
+  const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ);
+  camera.position.set(center.x + span * 0.12, center.y + span * 0.06, center.z + span * 0.12);
+  camera.lookAt(center);
+  state.yaw = camera.rotation.y;
+  state.pitch = camera.rotation.x;
+}
+
+function configureThree() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color("#0f1f25");
+  scene.fog = new THREE.Fog(0x0f1f25, 900, 7000);
+
+  camera = new THREE.PerspectiveCamera(68, 1, 0.1, 12000);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.domElement.style.width = "100%";
+  renderer.domElement.style.height = "100%";
+  viewportEl.appendChild(renderer.domElement);
+
+  raycaster = new THREE.Raycaster();
+
+  const hemi = new THREE.HemisphereLight(0x99c3ff, 0x223322, 0.8);
+  scene.add(hemi);
+
+  const dir = new THREE.DirectionalLight(0xfff0d7, 0.65);
+  dir.position.set(90, 180, -40);
+  scene.add(dir);
+
+  const grid = new THREE.GridHelper(5000, 140, 0x3a6a68, 0x264844);
+  grid.material.transparent = true;
+  grid.material.opacity = 0.35;
+  grid.position.y = 0;
+  scene.add(grid);
+
+  colliderGroup = new THREE.Group();
+  colliderGroup.name = "colliders";
+  scene.add(colliderGroup);
+
+  for (const layer of Object.keys(LAYER_COLORS)) {
+    const group = new THREE.Group();
+    group.name = `layer-${layer}`;
+    group.visible = state.enabledLayers.has(layer);
+    layerGroups.set(layer, group);
+    scene.add(group);
+  }
+
+  selectedMarker = new THREE.Mesh(
+    new THREE.SphereGeometry(1.5, 12, 12),
+    new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.9 })
+  );
+  selectedMarker.visible = false;
+  scene.add(selectedMarker);
+
+  animationClock = new THREE.Clock();
+}
+
+function resizeRenderer() {
+  const width = Math.max(1, viewportEl.clientWidth);
+  const height = Math.max(1, viewportEl.clientHeight);
+  renderer.setSize(width, height, false);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = Math.min(0.05, animationClock.getDelta());
+  applyMovement(delta);
+  renderer.render(scene, camera);
 }
 
 function wireEvents() {
   for (const box of document.querySelectorAll("[data-layer]")) {
-    box.addEventListener("change", (e) => {
-      const key = e.target.getAttribute("data-layer");
-      if (e.target.checked) {
-        state.enabledLayers.add(key);
+    box.addEventListener("change", (event) => {
+      const layer = event.target.getAttribute("data-layer");
+      if (event.target.checked) {
+        state.enabledLayers.add(layer);
       } else {
-        state.enabledLayers.delete(key);
+        state.enabledLayers.delete(layer);
+      }
+
+      if (layerGroups.has(layer)) {
+        layerGroups.get(layer).visible = state.enabledLayers.has(layer);
       }
       updateFiltered();
-      draw();
+      rebuildMapVisuals();
     });
   }
 
-  document.getElementById("search").addEventListener("input", (e) => {
-    state.searchText = String(e.target.value || "").trim().toLowerCase();
+  document.getElementById("search").addEventListener("input", (event) => {
+    state.searchText = String(event.target.value || "").trim().toLowerCase();
     updateFiltered();
-    draw();
+    rebuildMapVisuals();
   });
 
-  document.getElementById("density").addEventListener("input", (e) => {
-    const v = Number(e.target.value);
-    state.density = Math.max(0.01, v / 100);
+  document.getElementById("density").addEventListener("input", (event) => {
+    const value = Number(event.target.value || 100);
+    state.density = Math.max(0.01, value / 100);
     updateFiltered();
-    draw();
+    rebuildMapVisuals();
   });
 
   document.getElementById("reset-view").addEventListener("click", () => {
-    state.zoom = 1;
-    state.panX = 0;
-    state.panY = 0;
-    draw();
+    resetCamera();
   });
 
-  listEl.addEventListener("click", (e) => {
-    const row = e.target.closest(".object-row[data-id]");
+  listEl.addEventListener("click", (event) => {
+    const row = event.target.closest(".object-row[data-id]");
     if (!row) {
       return;
     }
+
     const id = Number(row.getAttribute("data-id"));
-    const feature = state.data.features.find((f) => f.id === id);
+    const feature = state.data.features.find((entry) => entry.id === id);
     if (!feature) {
       return;
     }
+
     state.selected = feature;
     renderSelection(feature, "feature");
-    const p = worldToScreen(feature.position.x, feature.position.z);
-    const centerX = canvas.clientWidth / 2;
-    const centerY = canvas.clientHeight / 2;
-    state.panX += centerX - p.x;
-    state.panY += centerY - p.y;
-    draw();
+    const position = featurePosition(feature);
+    setSelectedMarker(position);
+    focusCameraOn(position);
   });
 
-  canvas.addEventListener("wheel", (e) => {
-    e.preventDefault();
-    const delta = Math.sign(e.deltaY) * -0.08;
-    const prev = state.zoom;
-    state.zoom = Math.min(12, Math.max(0.25, state.zoom + delta));
-    const mx = e.offsetX;
-    const my = e.offsetY;
-    state.panX = mx - ((mx - state.panX) / prev) * state.zoom;
-    state.panY = my - ((my - state.panY) / prev) * state.zoom;
-    draw();
-  }, { passive: false });
-
-  canvas.addEventListener("pointerdown", (e) => {
-    state.isPanning = true;
-    state.movedWhilePanning = false;
-    state.lastPointer = { x: e.clientX, y: e.clientY };
-    canvas.setPointerCapture(e.pointerId);
+  viewportEl.addEventListener("click", () => {
+    renderer.domElement.requestPointerLock();
   });
 
-  canvas.addEventListener("pointermove", (e) => {
-    if (!state.isPanning || !state.lastPointer) {
+  document.addEventListener("pointerlockchange", () => {
+    state.isPointerLocked = document.pointerLockElement === renderer.domElement;
+  });
+
+  document.addEventListener("mousemove", (event) => {
+    if (!state.isPointerLocked) {
       return;
     }
-    const dx = e.clientX - state.lastPointer.x;
-    const dy = e.clientY - state.lastPointer.y;
-    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
-      state.movedWhilePanning = true;
-    }
-    state.lastPointer = { x: e.clientX, y: e.clientY };
-    state.panX += dx;
-    state.panY += dy;
-    draw();
+    const sensitivity = 0.0019;
+    state.yaw -= event.movementX * sensitivity;
+    state.pitch -= event.movementY * sensitivity;
+    state.pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, state.pitch));
+    updateCameraRotation();
   });
 
-  canvas.addEventListener("pointerup", (e) => {
-    const moved = state.movedWhilePanning;
-    state.isPanning = false;
-    state.movedWhilePanning = false;
-    state.lastPointer = null;
-    if (!moved) {
-      const picked = pickNearest(e.offsetX, e.offsetY);
-      if (picked) {
-        state.selected = picked.item;
-        renderSelection(picked.item, picked.mode);
-        draw();
-      }
+  document.addEventListener("keydown", (event) => {
+    state.keys.add(event.code);
+    if (event.code === "KeyF") {
+      pickInCenter();
     }
   });
 
-  window.addEventListener("resize", resizeCanvas);
+  document.addEventListener("keyup", (event) => {
+    state.keys.delete(event.code);
+  });
+
+  window.addEventListener("resize", resizeRenderer);
 }
 
 async function boot() {
-  const res = await fetch("./map-data.json", { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Failed to load map-data.json (${res.status})`);
+  const response = await fetch("./map-data.json", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Failed to load map-data.json (${response.status})`);
   }
-  state.data = await res.json();
+
+  state.data = await response.json();
+  configureThree();
   renderStats();
   renderLegend();
-  updateFiltered();
   wireEvents();
-  resizeCanvas();
+  updateFiltered();
+  rebuildMapVisuals();
+  resizeRenderer();
+  resetCamera();
 
   if (state.data.features.length > 0) {
     state.selected = state.data.features[0];
     renderSelection(state.selected, "feature");
+    setSelectedMarker(featurePosition(state.selected));
   }
+
+  animate();
 }
 
-boot().catch((err) => {
-  selectionEl.textContent = `Error: ${err.message}`;
+boot().catch((error) => {
+  selectionEl.textContent = `Error: ${error.message}`;
 });

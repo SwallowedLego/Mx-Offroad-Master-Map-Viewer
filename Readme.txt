@@ -3,11 +3,20 @@ MX Offroad Master Map Viewer (GitHub Pages)
 This repository now contains a static web tool that visualizes the uploaded game map file
 `47afacdf238bd338eccf531e71f9500d.data.br`.
 
-The viewer renders:
+The viewer renders in 3D with freecam movement:
 - Scene objects (including script-only objects)
 - Colliders
 - Trigger colliders (normally invisible in-game)
 - Lights, cameras, audio sources, particles, and physics objects
+
+3D controls
+- Click inside the viewport to lock the cursor
+- Mouse: look around (freecam)
+- W/A/S/D: move forward/left/back/right
+- Q/E: move down/up
+- Shift: speed boost
+- Esc: release cursor
+- F: inspect object under the center reticle
 
 Files
 - `index.html` - main app shell

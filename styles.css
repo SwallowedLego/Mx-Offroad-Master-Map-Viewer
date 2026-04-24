@@ -58,6 +58,11 @@ legend {
   font-size: 0.92rem;
 }
 
+#filtered-count {
+  font-family: "DM Mono", monospace;
+  font-size: 0.82rem;
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -143,10 +148,29 @@ button {
     linear-gradient(180deg, var(--bg-2), var(--bg-1));
 }
 
-canvas {
+#viewport {
+  position: absolute;
+  inset: 0;
+}
+
+#viewport canvas {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  margin-top: -7px;
+  border: 1px solid rgba(245, 212, 129, 0.75);
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow: 0 0 16px rgba(255, 205, 106, 0.4);
 }
 
 .legend {

@@ -26,9 +26,12 @@
             <input type="text" id="search" placeholder="name, component, tag" />
           </label>
           <label>
-            Point density
+            Render density
             <input type="range" id="density" min="1" max="100" value="100" />
           </label>
+          <p class="hint">
+            Freecam: Click viewport, then use Mouse + WASD, Q/E, Shift. Press Esc to release cursor.
+          </p>
         </div>
 
         <fieldset class="layer-toggles">
@@ -44,11 +47,12 @@
           <label><input type="checkbox" data-layer="particle" checked /> Particle Systems</label>
         </fieldset>
 
-        <button id="reset-view" type="button">Reset View</button>
+        <button id="reset-view" type="button">Reset Camera</button>
       </aside>
 
       <main class="map-panel">
-        <canvas id="map"></canvas>
+        <div id="viewport"></div>
+        <div class="reticle" aria-hidden="true"></div>
         <div class="legend" id="legend"></div>
       </main>
 
@@ -57,10 +61,11 @@
         <p class="hint">Click any point or collider to inspect details.</p>
         <div id="selection" class="selection">Nothing selected.</div>
         <h3>Filtered Objects</h3>
+        <p id="filtered-count" class="hint">0 objects visible</p>
         <div id="object-list" class="object-list"></div>
       </aside>
     </div>
 
-    <script src="app.js" defer></script>
+    <script type="module" src="app.js"></script>
   </body>
 </html>
