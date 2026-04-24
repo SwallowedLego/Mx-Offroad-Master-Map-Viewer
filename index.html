@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MX Offroad Master Map Viewer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=DM+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="panel left-panel">
+        <h1>MX Offroad Master</h1>
+        <p class="subtitle">Unity map explorer with hidden triggers and physics volumes</p>
+
+        <div class="stat-grid" id="stats"></div>
+
+        <div class="controls">
+          <label>
+            Search objects
+            <input type="text" id="search" placeholder="name, component, tag" />
+          </label>
+          <label>
+            Point density
+            <input type="range" id="density" min="1" max="100" value="100" />
+          </label>
+        </div>
+
+        <fieldset class="layer-toggles">
+          <legend>Layers</legend>
+          <label><input type="checkbox" data-layer="visible" checked /> Visible Meshes</label>
+          <label><input type="checkbox" data-layer="collider" checked /> Colliders</label>
+          <label><input type="checkbox" data-layer="trigger" checked /> Triggers</label>
+          <label><input type="checkbox" data-layer="script" checked /> Scripted Objects</label>
+          <label><input type="checkbox" data-layer="physics" checked /> Physics Bodies</label>
+          <label><input type="checkbox" data-layer="light" checked /> Lights</label>
+          <label><input type="checkbox" data-layer="camera" checked /> Cameras</label>
+          <label><input type="checkbox" data-layer="audio" checked /> Audio</label>
+          <label><input type="checkbox" data-layer="particle" checked /> Particle Systems</label>
+        </fieldset>
+
+        <button id="reset-view" type="button">Reset View</button>
+      </aside>
+
+      <main class="map-panel">
+        <canvas id="map"></canvas>
+        <div class="legend" id="legend"></div>
+      </main>
+
+      <aside class="panel right-panel">
+        <h2>Inspector</h2>
+        <p class="hint">Click any point or collider to inspect details.</p>
+        <div id="selection" class="selection">Nothing selected.</div>
+        <h3>Filtered Objects</h3>
+        <div id="object-list" class="object-list"></div>
+      </aside>
+    </div>
+
+    <script src="app.js" defer></script>
+  </body>
+</html>
