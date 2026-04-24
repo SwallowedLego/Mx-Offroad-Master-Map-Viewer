@@ -35,6 +35,8 @@ const filteredCountEl = document.getElementById("filtered-count");
 
 const layerGroups = new Map();
 const featurePointClouds = [];
+const surfaceMeshes = [];
+const featureById = new Map();
 let scene;
 let camera;
 let renderer;
@@ -78,6 +80,13 @@ function updateFiltered() {
     state.filteredFeatures = all.filter((_, index) => index % stride === 0);
   }
   renderObjectList();
+}
+
+function buildFeatureIndex() {
+  featureById.clear();
+  for (const feature of state.data.features) {
+    featureById.set(feature.id, feature);
+  }
 }
 
 function renderStats() {
@@ -174,7 +183,86 @@ function clearSceneObjects() {
   }
   featurePointClouds.length = 0;
 
-  colliderGroup.clear();
+  for (const mesh of surfaceMeshes) {
+    mesh.parent?.remove(mesh);
+    mesh.geometry.dispose();
+    mesh.material.dispose();
+  }
+  surfaceMeshes.length = 0;
+
+  for (const wire of [...colliderGroup.children]) {
+    wire.geometry.dispose();
+    wire.material.dispose();
+    colliderGroup.remove(wire);
+  }
+}
+
+function addMapSurfaceLayer() {
+  const mapGeometry = state.data.mapGeometry;
+  if (!mapGeometry || !Array.isArray(mapGeometry.meshes) || !Array.isArray(mapGeometry.instances)) {
+    return;
+  }
+
+  const meshesById = new Map();
+  for (const meshDef of mapGeometry.meshes) {
+    if (!Array.isArray(meshDef.positions) || !Array.isArray(meshDef.indices)) {
+      continue;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(meshDef.positions, 3));
+    geometry.setIndex(meshDef.indices);
+    geometry.computeVertexNormals();
+    meshesById.set(meshDef.id, geometry);
+  }
+
+  const byMeshId = new Map();
+  for (const instance of mapGeometry.instances) {
+    if (!meshesById.has(instance.meshId)) {
+      continue;
+    }
+    if (!byMeshId.has(instance.meshId)) {
+      byMeshId.set(instance.meshId, []);
+    }
+    byMeshId.get(instance.meshId).push(instance);
+  }
+
+  const surfaceLayer = layerGroups.get("visible");
+  const tempMatrix = new THREE.Matrix4();
+  const tempPosition = new THREE.Vector3();
+  const tempRotation = new THREE.Quaternion();
+  const tempScale = new THREE.Vector3();
+
+  for (const [meshId, instances] of byMeshId) {
+    const geometry = meshesById.get(meshId);
+    const material = new THREE.MeshStandardMaterial({
+      color: "#9eb8a3",
+      roughness: 0.92,
+      metalness: 0.03,
+      flatShading: false,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const instanced = new THREE.InstancedMesh(geometry, material, instances.length);
+    instanced.frustumCulled = false;
+    instanced.userData = {
+      mode: "surface",
+      instances,
+    };
+
+    for (let i = 0; i < instances.length; i += 1) {
+      const inst = instances[i];
+      tempPosition.set(inst.position.x, inst.position.y, inst.position.z);
+      tempRotation.set(inst.rotation.x, inst.rotation.y, inst.rotation.z, inst.rotation.w);
+      tempScale.set(inst.scale.x, inst.scale.y, inst.scale.z);
+      tempMatrix.compose(tempPosition, tempRotation, tempScale);
+      instanced.setMatrixAt(i, tempMatrix);
+    }
+    instanced.instanceMatrix.needsUpdate = true;
+
+    surfaceLayer.add(instanced);
+    surfaceMeshes.push(instanced);
+  }
 }
 
 function addFeatureLayers() {
@@ -197,6 +285,9 @@ function addFeatureLayers() {
   }
 
   for (const [layer, features] of featuresByLayer) {
+    if (layer === "visible" && surfaceMeshes.length > 0) {
+      continue;
+    }
     if (features.length === 0) {
       continue;
     }
@@ -282,6 +373,7 @@ function addColliderLayers() {
 
 function rebuildMapVisuals() {
   clearSceneObjects();
+  addMapSurfaceLayer();
   addFeatureLayers();
   addColliderLayers();
 }
@@ -357,6 +449,24 @@ function pickInCenter() {
       state.selected = collider;
       renderSelection(collider, "collider");
       setSelectedMarker(new THREE.Vector3(collider.center.x, collider.center.y, collider.center.z));
+      return;
+    }
+
+    if (hit.object.userData?.mode === "surface") {
+      const instanceId = hit.instanceId;
+      const inst = instanceId != null ? hit.object.userData.instances[instanceId] : null;
+      const feature = inst ? featureById.get(inst.gameObjectId) : null;
+      if (feature) {
+        state.selected = feature;
+        renderSelection(feature, "feature");
+        setSelectedMarker(featurePosition(feature));
+      } else if (inst) {
+        selectionEl.textContent = [
+          `Surface Instance`,
+          `GameObject: ${inst.gameObjectName} (${inst.gameObjectId})`,
+          `Mesh: ${inst.meshId}`,
+        ].join("\n");
+      }
       return;
     }
   }
@@ -532,6 +642,7 @@ async function boot() {
   }
 
   state.data = await response.json();
+  buildFeatureIndex();
   configureThree();
   renderStats();
   renderLegend();

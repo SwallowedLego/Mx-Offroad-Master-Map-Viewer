@@ -4,6 +4,7 @@ This repository now contains a static web tool that visualizes the uploaded game
 `47afacdf238bd338eccf531e71f9500d.data.br`.
 
 The viewer renders in 3D with freecam movement:
+- Actual map surface meshes (extracted from Unity MeshFilter/MeshRenderer data)
 - Scene objects (including script-only objects)
 - Colliders
 - Trigger colliders (normally invisible in-game)
@@ -17,6 +18,9 @@ The viewer renders in 3D with freecam movement:
 - Shift: speed boost
 - Esc: release cursor
 - F: inspect object under the center reticle
+
+Data note
+- `map-data.json` now includes mesh geometry and can be significantly larger than before.
 
 Files
 - `index.html` - main app shell

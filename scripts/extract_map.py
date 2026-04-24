@@ -8,6 +8,8 @@ from pathlib import Path
 
 import UnityPy
 
+MAX_TRIANGLES_PER_MESH = 9000
+
 
 def clamp_float(value):
     if value is None:
@@ -74,6 +76,58 @@ def ptr_path_id(ptr):
     return int(ptr.get("m_PathID", 0) or 0)
 
 
+def parse_obj_geometry(obj_text, max_triangles=MAX_TRIANGLES_PER_MESH):
+    vertices = []
+    triangles = []
+
+    for raw_line in obj_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("v "):
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            vertices.append((clamp_float(parts[1]), clamp_float(parts[2]), clamp_float(parts[3])))
+            continue
+        if line.startswith("f "):
+            parts = line.split()[1:]
+            face = []
+            for token in parts:
+                idx_part = token.split("/")[0]
+                if not idx_part:
+                    continue
+                try:
+                    idx = int(idx_part)
+                except ValueError:
+                    continue
+                if idx > 0:
+                    face.append(idx - 1)
+            if len(face) < 3:
+                continue
+            for i in range(1, len(face) - 1):
+                triangles.append((face[0], face[i], face[i + 1]))
+
+    if not vertices or not triangles:
+        return [], []
+
+    if len(triangles) > max_triangles:
+        step = int(math.ceil(len(triangles) / max_triangles))
+        triangles = triangles[::step]
+
+    positions = []
+    for x, y, z in vertices:
+        positions.extend((round(x, 4), round(y, 4), round(z, 4)))
+
+    indices = []
+    vert_count = len(vertices)
+    for a, b, c in triangles:
+        if a < vert_count and b < vert_count and c < vert_count:
+            indices.extend((int(a), int(b), int(c)))
+
+    return positions, indices
+
+
 def build_metadata(input_file):
     env = UnityPy.load(str(input_file))
 
@@ -83,6 +137,9 @@ def build_metadata(input_file):
     component_go_by_id = {}
     components_by_go = defaultdict(list)
     colliders = []
+    mesh_objects = {}
+    mesh_filter_by_go = defaultdict(list)
+    mesh_renderer_go = set()
     type_counts = Counter()
 
     tracked_component_types = {
@@ -110,6 +167,9 @@ def build_metadata(input_file):
         type_counts[obj_type] += 1
         path_id = int(obj.path_id)
         component_type_by_id[path_id] = obj_type
+
+        if obj_type == "Mesh":
+            mesh_objects[path_id] = obj
 
         if obj_type == "GameObject":
             try:
@@ -152,6 +212,16 @@ def build_metadata(input_file):
                 "local_rotation": q4(data.get("m_LocalRotation")),
                 "local_scale": v3(data.get("m_LocalScale"), {"x": 1.0, "y": 1.0, "z": 1.0}),
             }
+            continue
+
+        if obj_type == "MeshRenderer":
+            mesh_renderer_go.add(go_id)
+            continue
+
+        if obj_type == "MeshFilter":
+            mesh_id = ptr_path_id(data.get("m_Mesh"))
+            if go_id and mesh_id:
+                mesh_filter_by_go[go_id].append(mesh_id)
             continue
 
         if obj_type in {"MeshCollider", "BoxCollider", "SphereCollider", "CapsuleCollider"}:
@@ -291,6 +361,10 @@ def build_metadata(input_file):
         )
 
     collider_features = []
+    mesh_instances = []
+    mesh_usage_count = Counter()
+    mesh_gameobjects = defaultdict(list)
+    mesh_defs = []
     bounds = {
         "minX": math.inf,
         "maxX": -math.inf,
@@ -306,6 +380,66 @@ def build_metadata(input_file):
 
     for f in features:
         update_bounds(f["position"]["x"], f["position"]["z"])
+
+    for go_id, mesh_ids in mesh_filter_by_go.items():
+        if go_id not in mesh_renderer_go:
+            continue
+        tr_id = transform_by_go.get(go_id)
+        world = world_transforms.get(tr_id)
+        if world is None:
+            continue
+
+        go_name = game_objects.get(go_id, {}).get("name", f"GameObject_{go_id}")
+        for mesh_id in mesh_ids:
+            mesh_instances.append(
+                {
+                    "meshId": int(mesh_id),
+                    "gameObjectId": int(go_id),
+                    "gameObjectName": go_name,
+                    "position": {
+                        "x": round(world["position"]["x"], 4),
+                        "y": round(world["position"]["y"], 4),
+                        "z": round(world["position"]["z"], 4),
+                    },
+                    "rotation": {
+                        "x": round(world["rotation"]["x"], 6),
+                        "y": round(world["rotation"]["y"], 6),
+                        "z": round(world["rotation"]["z"], 6),
+                        "w": round(world["rotation"]["w"], 6),
+                    },
+                    "scale": {
+                        "x": round(world["scale"]["x"], 6),
+                        "y": round(world["scale"]["y"], 6),
+                        "z": round(world["scale"]["z"], 6),
+                    },
+                }
+            )
+            mesh_usage_count[int(mesh_id)] += 1
+            mesh_gameobjects[int(mesh_id)].append(int(go_id))
+
+    for mesh_id in sorted(mesh_usage_count.keys()):
+        mesh_obj = mesh_objects.get(mesh_id)
+        if mesh_obj is None:
+            continue
+        try:
+            mesh_data = mesh_obj.read()
+            obj_text = mesh_data.export()
+            positions, indices = parse_obj_geometry(obj_text)
+        except Exception:
+            continue
+
+        if not positions or not indices:
+            continue
+
+        mesh_defs.append(
+            {
+                "id": int(mesh_id),
+                "name": getattr(mesh_data, "m_Name", f"Mesh_{mesh_id}") or f"Mesh_{mesh_id}",
+                "positions": positions,
+                "indices": indices,
+                "instanceCount": int(mesh_usage_count[mesh_id]),
+            }
+        )
 
     for col in colliders:
         go_id = col["game_object_id"]
@@ -382,6 +516,8 @@ def build_metadata(input_file):
             "gameObjectCount": len(game_objects),
             "featureCount": len(features),
             "colliderCount": len(collider_features),
+            "meshDefinitionCount": len(mesh_defs),
+            "meshInstanceCount": len(mesh_instances),
         },
         "stats": {
             "objectTypeCounts": dict(type_counts.most_common()),
@@ -391,6 +527,10 @@ def build_metadata(input_file):
         "bounds": bounds,
         "features": features,
         "colliders": collider_features,
+        "mapGeometry": {
+            "meshes": mesh_defs,
+            "instances": mesh_instances,
+        },
     }
     return payload
 
