@@ -1,0 +1,316 @@
+# Rendering Math for Unity WebData
+ 
+## File Overview
+- **Format**: Unity WebData 1.0
+- **Size**: 79,852,901 bytes (76.15 MB)
+- **Contains**: 415 bundled files including meshes, textures, shaders, and game assets
+---
+ 
+## Core Rendering Pipeline Math
+ 
+### 1. **Vertex Transformations** 🎯
+ 
+The fundamental operation in 3D rendering is transforming vertices from **model space** to **screen space** through a series of matrix multiplications:
+ 
+```
+v_screen = P × V × M × v_model
+```
+ 
+Where:
+- `v_model` = vertex in model/object space (x, y, z, 1)
+- `M` = Model matrix (object → world space)
+- `V` = View matrix (world → camera space)
+- `P` = Projection matrix (camera → clip space)
+#### Model Matrix (M) - Position, Rotation, Scale
+ 
+A typical 4×4 transformation matrix:
+ 
+```
+M = [R₁₁  R₁₂  R₁₃  Tₓ]
+    [R₂₁  R₂₂  R₂₃  Tᵧ]
+    [R₃₁  R₃₂  R₃₃  Tᵤ]
+    [ 0    0    0   1 ]
+```
+ 
+Where:
+- **R** = 3×3 rotation + scale submatrix
+- **T** = (Tₓ, Tᵧ, Tᵤ) = translation vector
+**Operations:**
+```
+v' = M × v = R × v + T
+```
+ 
+---
+ 
+### 2. **Vertex Data** (Found at offset 3,646,612)
+ 
+Each vertex is stored as a 3D position vector:
+ 
+```
+v = (x, y, z)
+```
+ 
+**Key operations:**
+ 
+**Magnitude/Length:**
+```
+||v|| = √(x² + y² + z²)
+```
+ 
+**Normalization** (for direction vectors):
+```
+v̂ = v / ||v|| = (x/||v||, y/||v||, z/||v||)
+```
+ 
+**Distance between vertices:**
+```
+d(v₁, v₂) = ||v₂ - v₁|| = √((x₂-x₁)² + (y₂-y₁)² + (z₂-z₁)²)
+```
+ 
+---
+ 
+### 3. **Normal Vectors** (Found at offset 3,771,962)
+ 
+Normals are **unit vectors** perpendicular to surfaces, crucial for lighting calculations.
+ 
+```
+n = (nₓ, nᵧ, nᵤ)  where ||n|| = 1
+```
+ 
+**Key properties:**
+- Must be normalized: `||n|| = √(nₓ² + nᵧ² + nᵤ²) = 1.0`
+- Transformed by the **inverse transpose** of model matrix:
+  ```
+  n' = (M⁻¹)ᵀ × n
+  ```
+ 
+**Used in lighting calculations** (see Section 5)
+ 
+---
+ 
+### 4. **UV Texture Coordinates** (Found at offset 321,131)
+ 
+2D coordinates that map 3D vertices to 2D texture images:
+ 
+```
+uv = (u, v)  typically in range [0, 1]
+```
+ 
+**Texture sampling:**
+```
+color = texture2D(sampler, uv)
+pixel_x = u × texture_width
+pixel_y = v × texture_height
+```
+ 
+**UV interpolation** (for fragments between vertices):
+```
+uv_fragment = w₁×uv₁ + w₂×uv₂ + w₃×uv₃
+```
+where w₁, w₂, w₃ are barycentric coordinates
+ 
+---
+ 
+### 5. **Lighting Calculations** 💡
+ 
+#### Phong Reflection Model
+ 
+Total light at a point:
+```
+I = I_ambient + I_diffuse + I_specular
+```
+ 
+**Ambient (uniform background light):**
+```
+I_ambient = kₐ × Lₐ
+```
+ 
+**Diffuse (Lambert's law):**
+```
+I_diffuse = kd × Ld × max(0, n · L)
+```
+ 
+**Specular (shiny highlights):**
+```
+I_specular = kₛ × Lₛ × max(0, R · V)ᵅ
+```
+ 
+Where:
+- `n` = surface normal (from normal data)
+- `L` = light direction vector
+- `V` = view direction vector
+- `R` = reflection vector = 2(n·L)n - L
+- `α` = shininess exponent
+- `k` = material coefficients
+- `L` = light intensities
+**Dot product** (fundamental operation):
+```
+a · b = aₓbₓ + aᵧbᵧ + aᵤbᵤ = ||a|| ||b|| cos(θ)
+```
+ 
+---
+ 
+### 6. **Projection Math** 📐
+ 
+#### Perspective Projection Matrix
+ 
+Converts 3D camera space to 2D screen with depth:
+ 
+```
+P = [f/aspect   0      0           0    ]
+    [   0       f      0           0    ]
+    [   0       0   (far+near)/(near-far)   (2×far×near)/(near-far)]
+    [   0       0     -1           0    ]
+```
+ 
+Where:
+- `f = 1 / tan(FOV/2)` = focal length
+- `aspect = width / height`
+- `near`, `far` = clipping planes
+**Result:**
+```
+v_clip = P × v_camera
+v_ndc = v_clip / v_clip.w  (perspective divide)
+```
+ 
+NDC (Normalized Device Coordinates): `[-1, 1]³`
+ 
+---
+ 
+### 7. **Screen Space Transformation**
+ 
+```
+screen_x = (ndc_x + 1) × width / 2
+screen_y = (ndc_y + 1) × height / 2
+depth = (ndc_z + 1) / 2
+```
+ 
+---
+ 
+### 8. **Triangle Rasterization** 🔺
+ 
+Determining which pixels are inside a triangle:
+ 
+**Barycentric Coordinates:**
+ 
+For point P and triangle vertices v₀, v₁, v₂:
+ 
+```
+P = w₀v₀ + w₁v₁ + w₂v₂
+where w₀ + w₁ + w₂ = 1
+```
+ 
+**Calculation:**
+```
+w₀ = ((v₁.y - v₂.y)(P.x - v₂.x) + (v₂.x - v₁.x)(P.y - v₂.y)) / det
+w₁ = ((v₂.y - v₀.y)(P.x - v₂.x) + (v₀.x - v₂.x)(P.y - v₂.y)) / det
+w₂ = 1 - w₀ - w₁
+ 
+det = (v₁.y - v₂.y)(v₀.x - v₂.x) + (v₂.x - v₁.x)(v₀.y - v₂.y)
+```
+ 
+Point is inside if: `w₀, w₁, w₂ ∈ [0, 1]`
+ 
+**Attribute interpolation:**
+```
+attribute = w₀ × attr₀ + w₁ × attr₁ + w₂ × attr₂
+```
+ 
+Applied to: normals, UVs, colors, etc.
+ 
+---
+ 
+### 9. **Depth Testing (Z-Buffer)**
+ 
+For each fragment:
+```
+if (fragment_depth < depth_buffer[x][y]) {
+    depth_buffer[x][y] = fragment_depth
+    color_buffer[x][y] = fragment_color
+}
+```
+ 
+Ensures correct occlusion (closer objects hide farther ones)
+ 
+---
+ 
+### 10. **Shader Pipeline** 🎨
+ 
+#### Vertex Shader (runs per vertex)
+```glsl
+// Input: vertex attributes
+vec3 position;
+vec3 normal;
+vec2 uv;
+ 
+// Output: clip space position
+gl_Position = projection × view × model × vec4(position, 1.0);
+```
+ 
+#### Fragment Shader (runs per pixel)
+```glsl
+// Input: interpolated attributes
+vec3 normal_interp;
+vec2 uv_interp;
+ 
+// Output: final color
+vec4 color = texture(sampler, uv_interp);
+color *= lighting_calculation(normal_interp);
+```
+ 
+---
+ 
+## Summary of Math Operations
+ 
+### Vector Operations
+| Operation | Formula | Use |
+|-----------|---------|-----|
+| Add | `v + w = (v.x+w.x, v.y+w.y, v.z+w.z)` | Translation |
+| Scale | `k×v = (k×v.x, k×v.y, k×v.z)` | Scaling |
+| Dot product | `v·w = v.x×w.x + v.y×w.y + v.z×w.z` | Angles, projection |
+| Cross product | `v×w = (v.y×w.z - v.z×w.y, ...)` | Perpendicular vectors |
+| Length | `||v|| = √(v.x² + v.y² + v.z²)` | Distance |
+| Normalize | `v̂ = v / ||v||` | Unit vectors |
+ 
+### Matrix Operations
+| Operation | Formula | Use |
+|-----------|---------|-----|
+| Multiply | `(AB)ᵢⱼ = Σₖ Aᵢₖ × Bₖⱼ` | Transform composition |
+| Transform point | `v' = M × v` | Apply transformation |
+| Inverse | `M × M⁻¹ = I` | Reverse transform |
+| Transpose | `(Mᵀ)ᵢⱼ = Mⱼᵢ` | Normal transformation |
+ 
+---
+ 
+## Data Found in Your File
+ 
+| Component | Location (offset) | Description |
+|-----------|------------------|-------------|
+| Vertices | 3,646,612 | 3D positions (x,y,z) |
+| Normals | 3,771,962 | Surface normals for lighting |
+| UVs | 321,131 | Texture coordinates (u,v) |
+| Matrices | 3,636,071 | 4×4 transformation matrices |
+| Shaders | 10,920 | GPU programs |
+| Materials | 3,633,367 | Material properties |
+ 
+---
+ 
+## Complete Rendering Equation
+ 
+Putting it all together, for each pixel:
+ 
+```
+1. Transform vertex: v_clip = P × V × M × v_model
+2. Perspective divide: v_ndc = v_clip / v_clip.w
+3. To screen space: (screen_x, screen_y, depth)
+4. Rasterize triangles → fragments
+5. Interpolate attributes (normals, UVs) using barycentric coords
+6. Depth test: if closer than z-buffer, continue
+7. Lighting calculation: I = ambient + diffuse + specular
+8. Texture sampling: color = texture(uv)
+9. Final color: pixel = texture_color × lighting × material
+10. Write to framebuffer
+```
+ 
+This pipeline processes millions of vertices and fragments per frame (at 60 FPS, that's 16.67ms per frame)!
+ 
