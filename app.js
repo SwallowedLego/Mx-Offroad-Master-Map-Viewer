@@ -6,6 +6,7 @@ let scene;
 let camera;
 let renderer;
 let clock;
+let mapRoot;
 const keys = new Set();
 
 let yaw = 0;
@@ -19,6 +20,9 @@ function createRenderer() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color("#101417");
   scene.fog = new THREE.Fog(0x101417, 900, 9000);
+  mapRoot = new THREE.Group();
+  mapRoot.scale.set(1, 1, -1);
+  scene.add(mapRoot);
 
   camera = new THREE.PerspectiveCamera(70, 1, 0.1, 20000);
   camera.rotation.order = "YXZ";
@@ -43,8 +47,8 @@ function setCameraFromBounds(bounds) {
   const centerX = (bounds.minX + bounds.maxX) * 0.5;
   const centerZ = (bounds.minZ + bounds.maxZ) * 0.5;
   const span = Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ);
-  camera.position.set(centerX + span * 0.15, span * 0.09 + 80, centerZ + span * 0.15);
-  camera.lookAt(centerX, 60, centerZ);
+  camera.position.set(centerX + span * 0.15, span * 0.09 + 80, -(centerZ + span * 0.15));
+  camera.lookAt(centerX, 60, -centerZ);
   yaw = camera.rotation.y;
   pitch = camera.rotation.x;
 }
@@ -105,7 +109,7 @@ function buildMapMeshes(data) {
       mesh.setMatrixAt(i, tempMatrix);
     }
     mesh.instanceMatrix.needsUpdate = true;
-    scene.add(mesh);
+    mapRoot.add(mesh);
   }
 }
 
