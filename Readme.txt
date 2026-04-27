@@ -1,26 +1,23 @@
-MX Offroad Master Map Viewer (GitHub Pages)
+MX Offroad Master Map Renderer (GitHub Pages)
 
-This repository now contains a static web tool that visualizes the uploaded game map file
+This repository contains a static web renderer that visualizes the uploaded game map file
 `47afacdf238bd338eccf531e71f9500d.data.br`.
 
-The viewer renders in 3D with freecam movement:
-- Actual map surface meshes (extracted from Unity MeshFilter/MeshRenderer data)
-- Scene objects (including script-only objects)
-- Colliders
-- Trigger colliders (normally invisible in-game)
-- Lights, cameras, audio sources, particles, and physics objects
+The renderer is intentionally minimal and optimized:
+- Renders only the actual map surface meshes
+- Uses instanced meshes for efficient drawing
+- Fullscreen viewport with no debug UI
 
-3D controls
+Controls
 - Click inside the viewport to lock the cursor
-- Mouse: look around (freecam)
-- W/A/S/D: move forward/left/back/right
-- Q/E: move down/up
-- Shift: speed boost
+- Mouse: look around
+- W/A/S/D: move
+- Q/E: descend/ascend
+- Shift: faster movement
 - Esc: release cursor
-- F: inspect object under the center reticle
 
 Data note
-- `map-data.json` now includes mesh geometry and can be significantly larger than before.
+- `map-data.json` includes extracted mesh geometry and can be large.
 
 Files
 - `index.html` - main app shell
